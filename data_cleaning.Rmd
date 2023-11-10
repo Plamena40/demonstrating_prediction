@@ -1,0 +1,1770 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+rm(list = ls())
+```
+
+```{r}
+# library(DMwR) # SMOTE
+library(data.table)
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(REDCapR)
+library(DT)
+library(tidyr)
+library(tidyverse)
+library(ggplot2) # these packages are used to create graphs
+library(ggpubr) # 
+library(plotly) #
+library(gtsummary) #
+library(MASS)
+library(jsonlite)
+library(survival)
+library(gt)
+library(caret)
+library(ROCR)
+library(ROSE)
+library(MLeval)
+library(xgboost)
+library(earth)
+library(mda)
+library(randomForest)
+library(ada)
+library(kernlab)
+library(ResourceSelection)
+```
+
+```{r}
+## data paths
+icustays_path <- "/Users/plamena/Desktop/mimic-iv-2.2/icustays.csv"
+admissions_path <- "/Users/plamena/Desktop/mimic-iv-2.2/admissions.csv"
+patients_path <- "/Users/plamena/Desktop/mimic-iv-2.2/patients.csv"
+diagnoses_path <- "/Users/plamena/Desktop/mimic-iv-2.2/diagnoses_icd.csv"
+chartevents_path <- "/Users/plamena/Desktop/mimic-iv-2.2/chartevents.csv"
+labevents_path <- "/Users/plamena/Desktop/mimic-iv-2.2/labevents.csv"
+
+## column names
+chartevents_cols <-c("subject_id", "hadm_id", "stay_id", "caregiver_id", "charttime",
+                   "storetime", "itemid", "value", "valuenum", "valueuom", "warning") 
+labevents_cols <-c("labevent_id", "subject_id", "hadm_id", "specimen_id", "itemid",
+                   "order_provider_id", "charttime", "storetime", "value", 
+                   "valuenum","valueuom", "ref_range_lower", "ref_range_upper", "flag",
+                   "priority", "comments") 
+```
+
+```{r}
+## creating datasets
+diagnoses <- fread(diagnoses_path)
+S06 <- diagnoses[str_detect(diagnoses$icd_code, "S06"),]
+
+TBI_hadm_ids <- S06$hadm_id
+
+TBI_admissions <- fread(admissions_path) %>% 
+      subset(hadm_id %in% TBI_hadm_ids)
+
+TBI_diagnoses <- subset(diagnoses, hadm_id %in% TBI_hadm_ids)
+
+## takes first icu stay for hospitalizations with a TBI diagnosis
+TBI_icustays <- fread(icustays_path) %>% 
+                subset(hadm_id %in% TBI_hadm_ids) %>% 
+                group_by(subject_id, hadm_id) %>%
+                dplyr::mutate(first_icustay = dplyr::first(stay_id)) %>%
+                filter(stay_id == first_icustay) %>% 
+                subset(select = c(hadm_id, intime, outtime, los))
+```
+
+
+
+ED values
+```{r}
+# takes only TBI hospitalizations from lab events and filters to observations collected during first 24 hours of icu stay
+
+c1 <- fread(labevents_path, nrow=10000000) %>% 
+      subset(hadm_id %in% TBI_hadm_ids)
+c1_icustays <- left_join(c1, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c2 <- fread(labevents_path, skip=10000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>% 
+      subset(hadm_id %in% TBI_hadm_ids)
+c2_icustays <- left_join(c2, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c3 <- fread(labevents_path, skip=20000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>% 
+      subset(hadm_id %in% TBI_hadm_ids)
+c3_icustays <- left_join(c3, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c4 <- fread(labevents_path, skip=30000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c4_icustays <- left_join(c4, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c5 <- fread(labevents_path, skip=40000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c5_icustays <- left_join(c5, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c6 <- fread(labevents_path, skip=50000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c6_icustays <- left_join(c6, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c7 <- fread(labevents_path, skip=60000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c7_icustays <- left_join(c7, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c8 <- fread(labevents_path, skip=70000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c8_icustays <- left_join(c8, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c9 <- fread(labevents_path, skip=80000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c9_icustays <- left_join(c9, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c10 <- fread(labevents_path, skip=90000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c10_icustays <- left_join(c10, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c11 <- fread(labevents_path, skip=100000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c11_icustays <- left_join(c11, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c12 <- fread(labevents_path, skip=110000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c12_icustays <- left_join(c12, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+```
+
+```{r}
+merge1 <- full_join(c1_icustays, c2_icustays)
+merge2 <- full_join(merge1, c3_icustays)
+merge3 <- full_join(merge2, c4_icustays)
+merge4 <- full_join(merge3, c5_icustays)
+merge5 <- full_join(merge4, c6_icustays)
+merge6 <- full_join(merge5, c7_icustays)
+merge7 <- full_join(merge6, c8_icustays)
+merge8 <- full_join(merge7, c9_icustays)
+merge9 <- full_join(merge8, c10_icustays)
+merge10 <- full_join(merge9, c11_icustays)
+final_merge <- full_join(merge10, c12_icustays)
+```
+
+```{r}
+# write.csv(final_merge, "/Users/plamena/Desktop/mimic-iv-2.2/labevents_merged_arrive")
+final_merge <- read.csv("/Users/plamena/Desktop/mimic-iv-2.2/labevents_merged_arrive")
+
+final_merge_subset <- final_merge %>% 
+  filter(itemid %in% c("51237", "51275", "51279", "51006"))
+
+lab_wide_valuenum <- spread(final_merge_subset, itemid, valuenum)
+
+colnames(lab_wide_valuenum)[colnames(lab_wide_valuenum) == "51237"]="INR_arrival"
+colnames(lab_wide_valuenum)[colnames(lab_wide_valuenum) == "51275"]="PTT_arrival"
+colnames(lab_wide_valuenum)[colnames(lab_wide_valuenum) == "51279"]="RBC_count_arrival"
+colnames(lab_wide_valuenum)[colnames(lab_wide_valuenum) == "51006"]="BUN_arrival"
+# 51237 INR, 51275 PTT
+
+lab_final <- lab_wide_valuenum %>% subset(select=c(hadm_id, charttime,
+                                     INR_arrival, PTT_arrival, 
+                                     RBC_count_arrival, BUN_arrival))
+
+lab_final2 <- lab_final %>% group_by(hadm_id) %>%
+                summarise_each(funs(first(.[!is.na(.)])))
+```
+
+chartevents arrival
+```{r}
+# takes only TBI hospitalizations from chart events and filters to observations collected during first 24 hours of icu stay
+
+c1 <- fread(chartevents_path, nrow=10000000) %>% 
+      subset(hadm_id %in% TBI_hadm_ids)
+c1_icustays <- left_join(c1, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c2 <- fread(chartevents_path, skip=10000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>% 
+      subset(hadm_id %in% TBI_hadm_ids)
+c2_icustays <- left_join(c2, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c3 <- fread(chartevents_path, skip=20000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>% 
+      subset(hadm_id %in% TBI_hadm_ids)
+c3_icustays <- left_join(c3, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c4 <- fread(chartevents_path, skip=30000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c4_icustays <- left_join(c4, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c5 <- fread(chartevents_path, skip=40000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c5_icustays <- left_join(c5, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c6 <- fread(chartevents_path, skip=50000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c6_icustays <- left_join(c6, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c7 <- fread(chartevents_path, skip=60000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c7_icustays <- left_join(c7, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c8 <- fread(chartevents_path, skip=70000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c8_icustays <- left_join(c8, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c9 <- fread(chartevents_path, skip=80000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c9_icustays <- left_join(c9, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c10 <- fread(chartevents_path, skip=90000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c10_icustays <- left_join(c10, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c11 <- fread(chartevents_path, skip=100000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c11_icustays <- left_join(c11, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c12 <- fread(chartevents_path, skip=110000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c12_icustays <- left_join(c12, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c13 <- fread(chartevents_path, skip=120000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c13_icustays <- left_join(c13, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c14 <- fread(chartevents_path, skip=130000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c14_icustays <- left_join(c14, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c15 <- fread(chartevents_path, skip=140000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c15_icustays <- left_join(c15, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c16 <- fread(chartevents_path, skip=150000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c16_icustays <- left_join(c16, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c17 <- fread(chartevents_path, skip=160000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c17_icustays <- left_join(c17, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c18 <- fread(chartevents_path, skip=170000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c18_icustays <- left_join(c18, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c19 <- fread(chartevents_path, skip=180000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c19_icustays <- left_join(c19, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c20 <- fread(chartevents_path, skip=190000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c20_icustays <- left_join(c20, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c21 <- fread(chartevents_path, skip=200000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c21_icustays <- left_join(c21, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c22 <- fread(chartevents_path, skip=210000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c22_icustays <- left_join(c22, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c23 <- fread(chartevents_path, skip=220000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c23_icustays <- left_join(c23, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c24 <- fread(chartevents_path, skip=230000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c24_icustays <- left_join(c24, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c25 <- fread(chartevents_path, skip=240000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c25_icustays <- left_join(c25, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c26 <- fread(chartevents_path, skip=250000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c26_icustays <- left_join(c26, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c27 <- fread(chartevents_path, skip=260000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c27_icustays <- left_join(c27, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c28 <- fread(chartevents_path, skip=270000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c28_icustays <- left_join(c28, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c29 <- fread(chartevents_path, skip=280000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c29_icustays <- left_join(c29, TBI_admissions, by="hadm_id") %>% 
+              filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c30 <- fread(chartevents_path, skip=290000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c30_icustays <- left_join(c30, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c31 <- fread(chartevents_path, skip=300000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c31_icustays <- left_join(c31, TBI_admissions, by="hadm_id") %>% 
+              filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+
+c32 <- fread(chartevents_path, skip=310000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c32_icustays <- left_join(c32, TBI_admissions, by="hadm_id") %>% 
+               filter(charttime >= admittime & charttime <= dischtime) %>%
+               filter(charttime < admittime+86400)
+```
+
+```{r}
+merge1 <- full_join(c1_icustays, c2_icustays)
+merge2 <- full_join(merge1, c3_icustays)
+merge3 <- full_join(merge2, c4_icustays)
+merge4 <- full_join(merge3, c5_icustays)
+merge5 <- full_join(merge4, c6_icustays)
+merge6 <- full_join(merge5, c7_icustays)
+merge7 <- full_join(merge6, c8_icustays)
+merge8 <- full_join(merge7, c9_icustays)
+merge9 <- full_join(merge8, c10_icustays)
+merge10 <- full_join(merge9, c11_icustays)
+merge11 <- full_join(merge10, c12_icustays)
+merge12 <- full_join(merge11, c13_icustays)
+merge13 <- full_join(merge12, c14_icustays)
+merge14 <- full_join(merge13, c15_icustays)
+merge15 <- full_join(merge14, c16_icustays)
+merge16 <- full_join(merge15, c17_icustays)
+merge17 <- full_join(merge16, c18_icustays)
+merge18 <- full_join(merge17, c19_icustays)
+merge19 <- full_join(merge18, c20_icustays)
+merge20 <- full_join(merge19, c21_icustays)
+merge21 <- full_join(merge20, c22_icustays)
+merge22 <- full_join(merge21, c23_icustays)
+merge23 <- full_join(merge22, c24_icustays)
+merge24 <- full_join(merge23, c25_icustays)
+merge25 <- full_join(merge24, c26_icustays)
+merge26 <- full_join(merge25, c27_icustays)
+merge27 <- full_join(merge26, c28_icustays)
+merge28 <- full_join(merge27, c29_icustays)
+merge29 <- full_join(merge28, c30_icustays)
+merge30 <- full_join(merge29, c31_icustays)
+final_merge <- full_join(merge30, c32_icustays)
+```
+
+```{r}
+# write.csv(final_merge, "/Users/plamena/Desktop/mimic-iv-2.2/chartevents_merged_arrival")
+final_merge <- read.csv("/Users/plamena/Desktop/mimic-iv-2.2/chartevents_merged_arrival")
+final_merge_subset <- final_merge %>% 
+  filter(itemid %in% c("220739", "223901", "223900", "220045",
+                       "283452", "227457", "225690",
+                       "220052", "220615", "227565", "227566", 
+                       "220179", "220180", "220277", "220228", "226540"))
+
+pupils <- final_merge %>% 
+  filter(itemid %in% c("227121", "227288"))
+
+# R 227121
+# L 227288
+```
+
+```{r}
+chart_wide_valuenum <- spread(final_merge_subset, itemid, valuenum)
+chart_wide_pupils <- spread(pupils, itemid, value)
+```
+
+```{r}
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "220739"]="GCS_E_arrival"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "223901"]="GCS_M_arrival"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "223900"]="GCS_V_arrival"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "220045"]="Heart_rate_arrival"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "283452"]="PaO2_arrival"
+# colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "673729"]="FiO2"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "227457"]="platelet_count_arrival"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "220615"]="creatinine_arrival"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "227565"]="vent_tank1_arrival"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "227566"]="vent_tank2_arrival"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "220179"]="SBP_arrival"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "220180"]="DBP_arrival"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "220277"]="pulse_ox_arrival"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "220228"]="hemoglobin_arrival"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "226540"]="hematocrit_arrival"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "220277"]="pulse_ox_arrival"
+
+
+colnames(chart_wide_pupils)[colnames(chart_wide_pupils) == "227121"]="pupil_r_arrival"
+colnames(chart_wide_pupils)[colnames(chart_wide_pupils) == "227288"]="pupil_l_arrival"
+
+# 221662 this is dopamine in input events
+```
+
+```{r}
+chart_final <- chart_wide_valuenum %>% subset(select=c(hadm_id, charttime, 
+                                     Heart_rate_arrival, creatinine_arrival, 
+                                     SBP_arrival, DBP_arrival,
+                                     platelet_count_arrival, GCS_E_arrival,
+                                     GCS_V_arrival, GCS_M_arrival, 
+                                     pulse_ox_arrival, hemoglobin_arrival, 
+                                     hematocrit_arrival))
+
+pupil_final <- chart_wide_pupils %>% subset(select=c(hadm_id, 
+                                                     charttime, pupil_r_arrival,
+                                                     pupil_l_arrival))
+```
+
+```{r}
+chart_final2 <- chart_final %>% 
+                group_by(hadm_id) %>%
+                summarise_each(funs(first(.[!is.na(.)])))
+
+pupil_final2 <- pupil_final %>% group_by(hadm_id) %>%
+                summarise_each(funs(first(.[!is.na(.)]))) %>% 
+                subset(select = c(hadm_id, pupil_r_arrival, pupil_l_arrival))
+```
+
+```{r}
+chart_final2$GCS_arrival <- rowSums(chart_final2[,c("GCS_E_arrival", "GCS_V_arrival", "GCS_M_arrival")])
+chart_final2$MAP_arrival <- chart_final2$DBP_arrival+1/3*(chart_final2$SBP_arrival-chart_final2$DBP_arrival)
+hadm_id_in_chart_final <- chart_final2$hadm_id
+```
+
+```{r}
+TBI_admissions_final <- TBI_admissions %>% filter(hadm_id %in% hadm_id_in_chart_final)
+chart_adm <- full_join(chart_final2, TBI_admissions_final)
+
+lab_final3 <- lab_final2 %>% subset(select=c(hadm_id, INR_arrival, 
+                                             PTT_arrival, 
+                                             RBC_count_arrival, BUN_arrival))
+
+chart_lab1 <- left_join(chart_adm, lab_final3)
+
+chart_lab <- left_join(chart_lab1, pupil_final2, 
+                       join_by(hadm_id == hadm_id))
+```
+
+```{r}
+chart_lab$Coagulopathy_arrival <- ifelse((chart_lab$platelet_count_arrival < 100) | (chart_lab$INR_arrival >= 1.4) | (chart_lab$PTT_arrival > 37),
+                          "Coagulopathy",
+                   ifelse((chart_lab$platelet_count_arrival >= 100) & (chart_lab$INR_arrival < 1.4) & (chart_lab$PTT_arrival <= 37), 
+                          "No coagulopathy", NA))
+
+chart_lab$Coagulopathy_bin_arrival <- ifelse(chart_lab$Coagulopathy_arrival == "Coagulopathy", 1, 
+                         ifelse(chart_lab$Coagulopathy_arrival == "No coagulopathy", 0, NA))
+
+chart_lab$Mortality <- ifelse(chart_lab$hospital_expire_flag == 1, "yes",
+                       ifelse(chart_lab$hospital_expire_flag == 0, "no", NA)) 
+
+chart_lab$pupil_reactivity_arrival <- ifelse(chart_lab$pupil_r_arrival == "Non-reactive" &
+                                     chart_lab$pupil_l_arrival == "Non-reactive",
+                                                            "Non-reactive",
+                              ifelse((chart_lab$pupil_r_arrival == "Brisk" |
+                                      chart_lab$pupil_r_arrival == "Sluggish") &
+                                      chart_lab$pupil_l_arrival == "Non-reactive", 
+                                                             "One-fixed", 
+                              ifelse((chart_lab$pupil_l_arrival == "Brisk" |
+                                      chart_lab$pupil_l_arrival == "Sluggish") &
+                                      chart_lab$pupil_r_arrival == "Non-reactive", 
+                                                             "One-fixed",
+                              ifelse((chart_lab$pupil_r_arrival == "Brisk" |
+                                      chart_lab$pupil_r_arrival == "Sluggish") & 
+                                      (chart_lab$pupil_l_arrival == "Brisk" |
+                                      chart_lab$pupil_l_arrival == "Sluggish"), 
+                                                              "Reactive", NA))))
+
+final_subjectids <- chart_lab$subject_id 
+gender_age <- fread(patients_path) %>% filter(subject_id %in% final_subjectids) %>%
+                         subset(select = c(subject_id, gender, anchor_age))
+
+TBI_final <- left_join(chart_lab, gender_age)
+
+# write.csv(TBI_final, "/Users/plamena/Desktop/mimic-iv-2.2/TBI_data_arrival")
+
+TBI_data_arrival <- read.csv("/Users/plamena/Desktop/mimic-iv-2.2/TBI_data_arrival")
+
+# TBI_sub <- chart_lab %>% filter(Coagulopathy_bin == 1)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# labevents day 1
+```{r}
+# takes only TBI hospitalizations from lab events and filters to observations collected during first 24 hours of icu stay
+
+c1 <- fread(labevents_path, nrow=10000000) %>% 
+      subset(hadm_id %in% TBI_hadm_ids)
+c1_icustays <- left_join(c1, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c2 <- fread(labevents_path, skip=10000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>% 
+      subset(hadm_id %in% TBI_hadm_ids)
+c2_icustays <- left_join(c2, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c3 <- fread(labevents_path, skip=20000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>% 
+      subset(hadm_id %in% TBI_hadm_ids)
+c3_icustays <- left_join(c3, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c4 <- fread(labevents_path, skip=30000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c4_icustays <- left_join(c4, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c5 <- fread(labevents_path, skip=40000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c5_icustays <- left_join(c5, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c6 <- fread(labevents_path, skip=50000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c6_icustays <- left_join(c6, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c7 <- fread(labevents_path, skip=60000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c7_icustays <- left_join(c7, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c8 <- fread(labevents_path, skip=70000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c8_icustays <- left_join(c8, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c9 <- fread(labevents_path, skip=80000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c9_icustays <- left_join(c9, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c10 <- fread(labevents_path, skip=90000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c10_icustays <- left_join(c10, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c11 <- fread(labevents_path, skip=100000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c11_icustays <- left_join(c11, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c12 <- fread(labevents_path, skip=110000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c12_icustays <- left_join(c12, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+```
+
+```{r}
+merge1 <- full_join(c1_icustays, c2_icustays)
+merge2 <- full_join(merge1, c3_icustays)
+merge3 <- full_join(merge2, c4_icustays)
+merge4 <- full_join(merge3, c5_icustays)
+merge5 <- full_join(merge4, c6_icustays)
+merge6 <- full_join(merge5, c7_icustays)
+merge7 <- full_join(merge6, c8_icustays)
+merge8 <- full_join(merge7, c9_icustays)
+merge9 <- full_join(merge8, c10_icustays)
+merge10 <- full_join(merge9, c11_icustays)
+final_merge <- full_join(merge10, c12_icustays)
+```
+
+```{r}
+# write.csv(final_merge, "/Users/plamena/Desktop/mimic-iv-2.2/labevents_merged")
+final_merge <- read.csv("/Users/plamena/Desktop/mimic-iv-2.2/labevents_merged")
+
+final_merge_subset <- final_merge %>% 
+  filter(itemid %in% c("51237", "51275", "51279", "51006", 
+                       "51250", "51248", "51249", "51277",
+                       "51254", "51244", "51256"))
+
+lab_wide_valuenum <- spread(final_merge_subset, itemid, valuenum)
+
+colnames(lab_wide_valuenum)[colnames(lab_wide_valuenum) == "51237"]="INR"
+colnames(lab_wide_valuenum)[colnames(lab_wide_valuenum) == "51275"]="PTT"
+colnames(lab_wide_valuenum)[colnames(lab_wide_valuenum) == "51279"]="RBC_count"
+colnames(lab_wide_valuenum)[colnames(lab_wide_valuenum) == "51006"]="BUN"
+colnames(lab_wide_valuenum)[colnames(lab_wide_valuenum) == "51250"]="MCV"
+colnames(lab_wide_valuenum)[colnames(lab_wide_valuenum) == "51248"]="MCH"
+colnames(lab_wide_valuenum)[colnames(lab_wide_valuenum) == "51249"]="MCHC"
+colnames(lab_wide_valuenum)[colnames(lab_wide_valuenum) == "51277"]="RDW"
+colnames(lab_wide_valuenum)[colnames(lab_wide_valuenum) == "51254"]="Monocytes"
+colnames(lab_wide_valuenum)[colnames(lab_wide_valuenum) == "51244"]="Lymphocytes"
+colnames(lab_wide_valuenum)[colnames(lab_wide_valuenum) == "51256"]="Neutrophil"
+# 51237 INR, 51275 PTT, 51250 MCV, 51248 MCH, 51249 MCHC, 51277 RDW, 51254 Monocytes,
+# 51244 Lymphocytes, 51256 Neutrophil
+
+lab_final <- lab_wide_valuenum %>% subset(select=c(hadm_id, charttime, 
+                                        los, intime, outtime,
+                                     INR, PTT, RBC_count, BUN, MCV,
+                                     MCH, MCHC, RDW, Monocytes,
+                                     Lymphocytes, Neutrophil))
+
+lab_final2 <- lab_final %>% group_by(hadm_id) %>%
+                summarise_each(funs(first(.[!is.na(.)])))
+```
+
+chartevents
+```{r}
+# takes only TBI hospitalizations from chart events and filters to observations collected during first 24 hours of icu stay
+
+c1 <- fread(chartevents_path, nrow=10000000) %>% 
+      subset(hadm_id %in% TBI_hadm_ids)
+c1_icustays <- left_join(c1, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c2 <- fread(chartevents_path, skip=10000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>% 
+      subset(hadm_id %in% TBI_hadm_ids)
+c2_icustays <- left_join(c2, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c3 <- fread(chartevents_path, skip=20000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>% 
+      subset(hadm_id %in% TBI_hadm_ids)
+c3_icustays <- left_join(c3, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c4 <- fread(chartevents_path, skip=30000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c4_icustays <- left_join(c4, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c5 <- fread(chartevents_path, skip=40000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c5_icustays <- left_join(c5, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c6 <- fread(chartevents_path, skip=50000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c6_icustays <- left_join(c6, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c7 <- fread(chartevents_path, skip=60000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c7_icustays <- left_join(c7, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c8 <- fread(chartevents_path, skip=70000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c8_icustays <- left_join(c8, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c9 <- fread(chartevents_path, skip=80000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c9_icustays <- left_join(c9, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c10 <- fread(chartevents_path, skip=90000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c10_icustays <- left_join(c10, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c11 <- fread(chartevents_path, skip=100000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c11_icustays <- left_join(c11, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c12 <- fread(chartevents_path, skip=110000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c12_icustays <- left_join(c12, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c13 <- fread(chartevents_path, skip=120000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c13_icustays <- left_join(c13, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c14 <- fread(chartevents_path, skip=130000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c14_icustays <- left_join(c14, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c15 <- fread(chartevents_path, skip=140000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c15_icustays <- left_join(c15, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c16 <- fread(chartevents_path, skip=150000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c16_icustays <- left_join(c16, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c17 <- fread(chartevents_path, skip=160000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c17_icustays <- left_join(c17, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c18 <- fread(chartevents_path, skip=170000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c18_icustays <- left_join(c18, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c19 <- fread(chartevents_path, skip=180000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c19_icustays <- left_join(c19, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c20 <- fread(chartevents_path, skip=190000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c20_icustays <- left_join(c20, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c21 <- fread(chartevents_path, skip=200000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c21_icustays <- left_join(c21, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c22 <- fread(chartevents_path, skip=210000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c22_icustays <- left_join(c22, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c23 <- fread(chartevents_path, skip=220000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c23_icustays <- left_join(c23, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c24 <- fread(chartevents_path, skip=230000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c24_icustays <- left_join(c24, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c25 <- fread(chartevents_path, skip=240000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c25_icustays <- left_join(c25, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c26 <- fread(chartevents_path, skip=250000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c26_icustays <- left_join(c26, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c27 <- fread(chartevents_path, skip=260000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c27_icustays <- left_join(c27, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c28 <- fread(chartevents_path, skip=270000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c28_icustays <- left_join(c28, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c29 <- fread(chartevents_path, skip=280000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c29_icustays <- left_join(c29, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c30 <- fread(chartevents_path, skip=290000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c30_icustays <- left_join(c30, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c31 <- fread(chartevents_path, skip=300000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c31_icustays <- left_join(c31, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+
+c32 <- fread(chartevents_path, skip=310000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c32_icustays <- left_join(c32, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime < intime+86400)
+```
+
+```{r}
+merge1 <- full_join(c1_icustays, c2_icustays)
+merge2 <- full_join(merge1, c3_icustays)
+merge3 <- full_join(merge2, c4_icustays)
+merge4 <- full_join(merge3, c5_icustays)
+merge5 <- full_join(merge4, c6_icustays)
+merge6 <- full_join(merge5, c7_icustays)
+merge7 <- full_join(merge6, c8_icustays)
+merge8 <- full_join(merge7, c9_icustays)
+merge9 <- full_join(merge8, c10_icustays)
+merge10 <- full_join(merge9, c11_icustays)
+merge11 <- full_join(merge10, c12_icustays)
+merge12 <- full_join(merge11, c13_icustays)
+merge13 <- full_join(merge12, c14_icustays)
+merge14 <- full_join(merge13, c15_icustays)
+merge15 <- full_join(merge14, c16_icustays)
+merge16 <- full_join(merge15, c17_icustays)
+merge17 <- full_join(merge16, c18_icustays)
+merge18 <- full_join(merge17, c19_icustays)
+merge19 <- full_join(merge18, c20_icustays)
+merge20 <- full_join(merge19, c21_icustays)
+merge21 <- full_join(merge20, c22_icustays)
+merge22 <- full_join(merge21, c23_icustays)
+merge23 <- full_join(merge22, c24_icustays)
+merge24 <- full_join(merge23, c25_icustays)
+merge25 <- full_join(merge24, c26_icustays)
+merge26 <- full_join(merge25, c27_icustays)
+merge27 <- full_join(merge26, c28_icustays)
+merge28 <- full_join(merge27, c29_icustays)
+merge29 <- full_join(merge28, c30_icustays)
+merge30 <- full_join(merge29, c31_icustays)
+final_merge <- full_join(merge30, c32_icustays)
+```
+
+```{r}
+# write.csv(final_merge, "/Users/plamena/Desktop/mimic-iv-2.2/chartevents_merged")
+final_merge <- read.csv("/Users/plamena/Desktop/mimic-iv-2.2/chartevents_merged")
+final_merge_subset <- final_merge %>% 
+  filter(itemid %in% c("220739", "223901", "223900", "220045",
+                       "283452", "227457", "225690",
+                       "220052", "220615", "227565", "227566", 
+                       "220179", "220180", "220277", "220228", "226540"))
+
+pupils <- final_merge %>% 
+  filter(itemid %in% c("227121", "227288"))
+
+# R 227121
+# L 227288
+```
+
+```{r}
+chart_wide_valuenum <- spread(final_merge_subset, itemid, valuenum)
+chart_wide_pupils <- spread(pupils, itemid, value)
+```
+
+```{r}
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "220739"]="GCS_E"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "223901"]="GCS_M"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "223900"]="GCS_V"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "220045"]="Heart_rate"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "283452"]="PaO2"
+# colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "673729"]="FiO2"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "227457"]="platelet_count"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "220615"]="creatinine"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "227565"]="vent_tank1"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "227566"]="vent_tank2"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "220179"]="SBP"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "220180"]="DBP"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "220277"]="pulse_ox"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "220228"]="hemoglobin"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "226540"]="hematocrit"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "220277"]="pulse_ox"
+
+
+colnames(chart_wide_pupils)[colnames(chart_wide_pupils) == "227121"]="pupil_r"
+colnames(chart_wide_pupils)[colnames(chart_wide_pupils) == "227288"]="pupil_l"
+
+# 221662 this is dopamine in input events
+```
+
+
+```{r}
+chart_final <- chart_wide_valuenum %>% subset(select=c(subject_id, hadm_id, charttime, 
+                                        los, intime, outtime,
+                                     Heart_rate, creatinine, SBP, DBP,
+                                     platelet_count, GCS_E,
+                                     GCS_V, GCS_M, pulse_ox, hemoglobin, hematocrit))
+
+pupil_final <- chart_wide_pupils %>% subset(select=c(hadm_id, charttime, pupil_r,
+                                                     pupil_l))
+```
+
+```{r}
+chart_final2 <- chart_final %>% 
+                group_by(hadm_id) %>%
+                summarise_each(funs(first(.[!is.na(.)])))
+
+pupil_final2 <- pupil_final %>% group_by(hadm_id) %>%
+                summarise_each(funs(first(.[!is.na(.)]))) %>% 
+                subset(select = c(hadm_id, pupil_r, pupil_l))
+```
+
+```{r}
+chart_final2$GCS <- rowSums(chart_final2[,c("GCS_E", "GCS_V", "GCS_M")])
+chart_final2$MAP <- chart_final2$DBP+1/3*(chart_final2$SBP-chart_final2$DBP)
+hadm_id_in_chart_final <- chart_final2$hadm_id
+```
+
+```{r}
+TBI_admissions_final <- TBI_admissions %>% filter(hadm_id %in% hadm_id_in_chart_final)
+chart_adm <- full_join(chart_final2, TBI_admissions_final)
+
+lab_final3 <- lab_final2 %>% subset(select=c(hadm_id, INR, PTT, RBC_count, BUN,
+                                             MCV, MCH, MCHC, RDW, Monocytes, 
+                                             Lymphocytes, Neutrophil))
+
+chart_lab1 <- left_join(chart_adm, lab_final3)
+
+chart_lab <- left_join(chart_lab1, pupil_final2, 
+                       join_by(hadm_id == hadm_id))
+```
+
+```{r}
+chart_lab$Coagulopathy <- ifelse((chart_lab$platelet_count < 100) | (chart_lab$INR >= 1.4) | (chart_lab$PTT > 37),
+                          "Coagulopathy",
+                   ifelse((chart_lab$platelet_count >= 100) & (chart_lab$INR < 1.4) & (chart_lab$PTT <= 37), 
+                          "No coagulopathy", NA))
+
+chart_lab$Coagulopathy_bin <- ifelse(chart_lab$Coagulopathy == "Coagulopathy", 1, 
+                         ifelse(chart_lab$Coagulopathy == "No coagulopathy", 0, NA))
+
+chart_lab$Mortality <- ifelse(chart_lab$hospital_expire_flag == 1, "yes",
+                       ifelse(chart_lab$hospital_expire_flag == 0, "no", NA)) 
+
+chart_lab$pupil_reactivity <- ifelse(chart_lab$pupil_r == "Non-reactive" &
+                                     chart_lab$pupil_l == "Non-reactive",
+                                                            "Non-reactive",
+                              ifelse((chart_lab$pupil_r == "Brisk" |
+                                      chart_lab$pupil_r == "Sluggish") &
+                                      chart_lab$pupil_l == "Non-reactive", 
+                                                             "One-fixed", 
+                              ifelse((chart_lab$pupil_l == "Brisk" |
+                                      chart_lab$pupil_l == "Sluggish") &
+                                      chart_lab$pupil_r == "Non-reactive", 
+                                                             "One-fixed",
+                              ifelse((chart_lab$pupil_r == "Brisk" |
+                                      chart_lab$pupil_r == "Sluggish") & 
+                                      (chart_lab$pupil_l == "Brisk" |
+                                      chart_lab$pupil_l == "Sluggish"), 
+                                                              "Reactive", NA))))
+
+final_subjectids <- chart_lab$subject_id 
+gender_age <- fread(patients_path) %>% filter(subject_id %in% final_subjectids) %>%
+                         subset(select = c(subject_id, gender, anchor_age))
+
+TBI_final <- left_join(chart_lab, gender_age)
+
+# write.csv(TBI_final, "/Users/plamena/Desktop/mimic-iv-2.2/TBI_data_icu1")
+
+chart_lab <- read.csv("/Users/plamena/Desktop/mimic-iv-2.2/TBI_data_icu1")
+
+# TBI_sub <- chart_lab %>% filter(Coagulopathy_bin == 1)
+
+```
+
+
+## Day 2
+```{r}
+## creating datasets
+diagnoses <- fread(diagnoses_path)
+S06 <- diagnoses[str_detect(diagnoses$icd_code, "S06"),]
+
+TBI_hadm_ids <- S06$hadm_id
+
+TBI_admissions <- fread(admissions_path) %>% 
+      subset(hadm_id %in% TBI_hadm_ids)
+
+TBI_diagnoses <- subset(diagnoses, hadm_id %in% TBI_hadm_ids)
+
+## takes first icu stay for hospitalizations with a TBI diagnosis
+TBI_icustays <- fread(icustays_path) %>% 
+                subset(hadm_id %in% TBI_hadm_ids) %>% 
+                group_by(subject_id, hadm_id) %>%
+                dplyr::mutate(first_icustay = dplyr::first(stay_id)) %>%
+                filter(stay_id == first_icustay) %>% 
+                subset(select = c(hadm_id, intime, outtime, los))
+```
+
+labevents day 1
+```{r}
+# takes only TBI hospitalizations from lab events and filters to observations collected during first 24 hours of icu stay
+
+c1 <- fread(labevents_path, nrow=10000000) %>% 
+      subset(hadm_id %in% TBI_hadm_ids)
+c1_icustays <- left_join(c1, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c2 <- fread(labevents_path, skip=10000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>% 
+      subset(hadm_id %in% TBI_hadm_ids)
+c2_icustays <- left_join(c2, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c3 <- fread(labevents_path, skip=20000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>% 
+      subset(hadm_id %in% TBI_hadm_ids)
+c3_icustays <- left_join(c3, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c4 <- fread(labevents_path, skip=30000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c4_icustays <- left_join(c4, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c5 <- fread(labevents_path, skip=40000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c5_icustays <- left_join(c5, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c6 <- fread(labevents_path, skip=50000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c6_icustays <- left_join(c6, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c7 <- fread(labevents_path, skip=60000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c7_icustays <- left_join(c7, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c8 <- fread(labevents_path, skip=70000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c8_icustays <- left_join(c8, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c9 <- fread(labevents_path, skip=80000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c9_icustays <- left_join(c9, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c10 <- fread(labevents_path, skip=90000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c10_icustays <- left_join(c10, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c11 <- fread(labevents_path, skip=100000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c11_icustays <- left_join(c11, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c12 <- fread(labevents_path, skip=110000001, nrow=10000000) %>% 
+      setnames(labevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c12_icustays <- left_join(c12, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+```
+
+```{r}
+merge1 <- full_join(c1_icustays, c2_icustays)
+merge2 <- full_join(merge1, c3_icustays)
+merge3 <- full_join(merge2, c4_icustays)
+merge4 <- full_join(merge3, c5_icustays)
+merge5 <- full_join(merge4, c6_icustays)
+merge6 <- full_join(merge5, c7_icustays)
+merge7 <- full_join(merge6, c8_icustays)
+merge8 <- full_join(merge7, c9_icustays)
+merge9 <- full_join(merge8, c10_icustays)
+merge10 <- full_join(merge9, c11_icustays)
+final_merge <- full_join(merge10, c12_icustays)
+```
+
+```{r}
+# write.csv(final_merge, "/Users/plamena/Desktop/mimic-iv-2.2/labevents_merged_day2")
+final_merge <- read.csv("/Users/plamena/Desktop/mimic-iv-2.2/labevents_merged_day2")
+
+final_merge_subset <- final_merge %>% 
+  filter(itemid %in% c("51237", "51275", "51279", "51006"))
+
+lab_wide_valuenum <- spread(final_merge_subset, itemid, valuenum)
+
+colnames(lab_wide_valuenum)[colnames(lab_wide_valuenum) == "51237"]="INR_day2"
+colnames(lab_wide_valuenum)[colnames(lab_wide_valuenum) == "51275"]="PTT_day2"
+colnames(lab_wide_valuenum)[colnames(lab_wide_valuenum) == "51279"]="RBC_count_day2"
+colnames(lab_wide_valuenum)[colnames(lab_wide_valuenum) == "51006"]="BUN_day2"
+# 51237 INR, 51275 PTT
+
+lab_final <- lab_wide_valuenum %>% subset(select=c(hadm_id,
+                                     INR_day2, PTT_day2, RBC_count_day2, 
+                                     BUN_day2))
+
+lab_final2 <- lab_final %>% group_by(hadm_id) %>%
+                summarise_each(funs(first(.[!is.na(.)])))
+```
+
+chartevents
+```{r}
+# takes only TBI hospitalizations from chart events and filters to observations collected during first 24 hours of icu stay
+
+c1 <- fread(chartevents_path, nrow=10000000) %>% 
+      subset(hadm_id %in% TBI_hadm_ids)
+c1_icustays <- left_join(c1, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c2 <- fread(chartevents_path, skip=10000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>% 
+      subset(hadm_id %in% TBI_hadm_ids)
+c2_icustays <- left_join(c2, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c3 <- fread(chartevents_path, skip=20000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>% 
+      subset(hadm_id %in% TBI_hadm_ids)
+c3_icustays <- left_join(c3, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c4 <- fread(chartevents_path, skip=30000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c4_icustays <- left_join(c4, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c5 <- fread(chartevents_path, skip=40000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c5_icustays <- left_join(c5, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c6 <- fread(chartevents_path, skip=50000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c6_icustays <- left_join(c6, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c7 <- fread(chartevents_path, skip=60000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c7_icustays <- left_join(c7, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c8 <- fread(chartevents_path, skip=70000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c8_icustays <- left_join(c8, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c9 <- fread(chartevents_path, skip=80000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c9_icustays <- left_join(c9, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c10 <- fread(chartevents_path, skip=90000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c10_icustays <- left_join(c10, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c11 <- fread(chartevents_path, skip=100000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c11_icustays <- left_join(c11, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c12 <- fread(chartevents_path, skip=110000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c12_icustays <- left_join(c12, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c13 <- fread(chartevents_path, skip=120000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c13_icustays <- left_join(c13, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c14 <- fread(chartevents_path, skip=130000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c14_icustays <- left_join(c14, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c15 <- fread(chartevents_path, skip=140000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c15_icustays <- left_join(c15, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c16 <- fread(chartevents_path, skip=150000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c16_icustays <- left_join(c16, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c17 <- fread(chartevents_path, skip=160000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c17_icustays <- left_join(c17, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c18 <- fread(chartevents_path, skip=170000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c18_icustays <- left_join(c18, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c19 <- fread(chartevents_path, skip=180000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c19_icustays <- left_join(c19, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c20 <- fread(chartevents_path, skip=190000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c20_icustays <- left_join(c20, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c21 <- fread(chartevents_path, skip=200000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c21_icustays <- left_join(c21, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c22 <- fread(chartevents_path, skip=210000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c22_icustays <- left_join(c22, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c23 <- fread(chartevents_path, skip=220000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c23_icustays <- left_join(c23, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c24 <- fread(chartevents_path, skip=230000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c24_icustays <- left_join(c24, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c25 <- fread(chartevents_path, skip=240000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c25_icustays <- left_join(c25, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c26 <- fread(chartevents_path, skip=250000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c26_icustays <- left_join(c26, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c27 <- fread(chartevents_path, skip=260000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c27_icustays <- left_join(c27, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c28 <- fread(chartevents_path, skip=270000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c28_icustays <- left_join(c28, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c29 <- fread(chartevents_path, skip=280000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c29_icustays <- left_join(c29, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c30 <- fread(chartevents_path, skip=290000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c30_icustays <- left_join(c30, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c31 <- fread(chartevents_path, skip=300000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+c31_icustays <- left_join(c31, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+
+c32 <- fread(chartevents_path, skip=310000001, nrow=10000000) %>% 
+      setnames(chartevents_cols) %>%
+      subset(hadm_id %in% TBI_hadm_ids)
+
+c32_icustays <- left_join(c32, TBI_icustays, by="hadm_id") %>% 
+               filter(charttime >= intime & charttime <= outtime) %>%
+               filter(charttime >= intime+86400 & charttime < intime+86400+86400)
+```
+
+```{r}
+merge1 <- full_join(c1_icustays, c2_icustays)
+merge2 <- full_join(merge1, c3_icustays)
+merge3 <- full_join(merge2, c4_icustays)
+merge4 <- full_join(merge3, c5_icustays)
+merge5 <- full_join(merge4, c6_icustays)
+merge6 <- full_join(merge5, c7_icustays)
+merge7 <- full_join(merge6, c8_icustays)
+merge8 <- full_join(merge7, c9_icustays)
+merge9 <- full_join(merge8, c10_icustays)
+merge10 <- full_join(merge9, c11_icustays)
+merge11 <- full_join(merge10, c12_icustays)
+merge12 <- full_join(merge11, c13_icustays)
+merge13 <- full_join(merge12, c14_icustays)
+merge14 <- full_join(merge13, c15_icustays)
+merge15 <- full_join(merge14, c16_icustays)
+merge16 <- full_join(merge15, c17_icustays)
+merge17 <- full_join(merge16, c18_icustays)
+merge18 <- full_join(merge17, c19_icustays)
+merge19 <- full_join(merge18, c20_icustays)
+merge20 <- full_join(merge19, c21_icustays)
+merge21 <- full_join(merge20, c22_icustays)
+merge22 <- full_join(merge21, c23_icustays)
+merge23 <- full_join(merge22, c24_icustays)
+merge24 <- full_join(merge23, c25_icustays)
+merge25 <- full_join(merge24, c26_icustays)
+merge26 <- full_join(merge25, c27_icustays)
+merge27 <- full_join(merge26, c28_icustays)
+merge28 <- full_join(merge27, c29_icustays)
+merge29 <- full_join(merge28, c30_icustays)
+merge30 <- full_join(merge29, c31_icustays)
+final_merge <- full_join(merge30, c32_icustays)
+```
+
+```{r}
+# write.csv(final_merge, "/Users/plamena/Desktop/mimic-iv-2.2/chartevents_merged_day2")
+final_merge <- read.csv("/Users/plamena/Desktop/mimic-iv-2.2/chartevents_merged_day2")
+final_merge_subset <- final_merge %>% 
+  filter(itemid %in% c("220739", "223901", "223900", "220045",
+                       "283452", "227457", "225690",
+                       "220052", "220615", "227565", "227566", 
+                       "220179", "220180", "220277", "220228", "226540"))
+
+pupils <- final_merge %>% 
+  filter(itemid %in% c("227121", "227288"))
+
+# R 227121
+# L 227288
+```
+
+```{r}
+chart_wide_valuenum <- spread(final_merge_subset, itemid, valuenum)
+chart_wide_pupils <- spread(pupils, itemid, value)
+```
+
+```{r}
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "220739"]="GCS_E_day2"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "223901"]="GCS_M_day2"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "223900"]="GCS_V_day2"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "220045"]="Heart_rate_day2"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "283452"]="PaO2_day2"
+# colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "673729"]="FiO2"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "227457"]="platelet_count_day2"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "220615"]="creatinine_day2"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "227565"]="vent_tank1_day2"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "227566"]="vent_tank2_day2"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "220179"]="SBP_day2"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "220180"]="DBP_day2"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "220277"]="pulse_ox_day2"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "220228"]="hemoglobin_day2"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "226540"]="hematocrit_day2"
+colnames(chart_wide_valuenum)[colnames(chart_wide_valuenum) == "220277"]="pulse_ox_day2"
+
+
+colnames(chart_wide_pupils)[colnames(chart_wide_pupils) == "227121"]="pupil_r_day2"
+colnames(chart_wide_pupils)[colnames(chart_wide_pupils) == "227288"]="pupil_l_day2"
+
+# 221662 this is dopamine in input events
+```
+
+
+```{r}
+chart_final <- chart_wide_valuenum %>% subset(select=c(subject_id, hadm_id, 
+                                     Heart_rate_day2, creatinine_day2, 
+                                     SBP_day2, DBP_day2,
+                                     platelet_count_day2, GCS_E_day2,
+                                     GCS_V_day2, GCS_M_day2, pulse_ox_day2, 
+                                     hemoglobin_day2, hematocrit_day2))
+
+pupil_final <- chart_wide_pupils %>% subset(select=c(hadm_id, pupil_r_day2,
+                                                     pupil_l_day2))
+```
+
+```{r}
+chart_final2 <- chart_final %>% 
+                group_by(hadm_id) %>%
+                summarise_each(funs(first(.[!is.na(.)])))
+
+pupil_final2 <- pupil_final %>% group_by(hadm_id) %>%
+                summarise_each(funs(first(.[!is.na(.)]))) %>% 
+                subset(select = c(hadm_id, pupil_r_day2, pupil_l_day2))
+```
+
+```{r}
+chart_final2$GCS_day2 <- rowSums(chart_final2[,c("GCS_E_day2", "GCS_V_day2", "GCS_M_day2")])
+chart_final2$MAP_day2 <- chart_final2$DBP_day2+1/3*(chart_final2$SBP_day2-chart_final2$DBP_day2)
+hadm_id_in_chart_final <- chart_final2$hadm_id
+```
+
+```{r}
+TBI_admissions_final <- TBI_admissions %>% filter(hadm_id %in% hadm_id_in_chart_final)
+chart_adm <- full_join(chart_final2, TBI_admissions_final)
+
+lab_final3 <- lab_final2 %>% subset(select=c(hadm_id, INR_day2, PTT_day2, RBC_count_day2, BUN_day2))
+
+chart_lab1 <- left_join(chart_adm, lab_final3)
+
+chart_lab <- left_join(chart_lab1, pupil_final2, 
+                       join_by(hadm_id == hadm_id))
+```
+
+```{r}
+chart_lab$Coagulopathy_day2 <- ifelse((chart_lab$platelet_count_day2 < 100) | (chart_lab$INR_day2 >= 1.4) | (chart_lab$PTT_day2 > 37),
+                          "Coagulopathy",
+                   ifelse((chart_lab$platelet_count_day2 >= 100) & (chart_lab$INR_day2 < 1.4) & (chart_lab$PTT_day2 <= 37), 
+                          "No coagulopathy", NA))
+
+chart_lab$Coagulopathy_bin_day2 <- ifelse(chart_lab$Coagulopathy_day2 == "Coagulopathy", 1, 
+                         ifelse(chart_lab$Coagulopathy_day2 == "No coagulopathy", 0, NA))
+
+chart_lab$pupil_reactivity_day2 <- ifelse(chart_lab$pupil_r_day2 == "Non-reactive" &
+                                     chart_lab$pupil_l_day2 == "Non-reactive",
+                                                            "Non-reactive",
+                              ifelse((chart_lab$pupil_r_day2 == "Brisk" |
+                                      chart_lab$pupil_r_day2 == "Sluggish") &
+                                      chart_lab$pupil_l_day2 == "Non-reactive", 
+                                                             "One-fixed", 
+                              ifelse((chart_lab$pupil_l_day2 == "Brisk" |
+                                      chart_lab$pupil_l_day2 == "Sluggish") &
+                                      chart_lab$pupil_r_day2 == "Non-reactive", 
+                                                             "One-fixed",
+                              ifelse((chart_lab$pupil_r_day2 == "Brisk" |
+                                      chart_lab$pupil_r_day2 == "Sluggish") & 
+                                      (chart_lab$pupil_l_day2 == "Brisk" |
+                                      chart_lab$pupil_l_day2 == "Sluggish"), 
+                                                              "Reactive", NA))))
+
+final_subjectids <- chart_lab$subject_id 
+gender_age <- fread(patients_path) %>% filter(subject_id %in% final_subjectids) %>%
+                         subset(select = c(subject_id, gender, anchor_age))
+
+TBI_final_day2 <- left_join(chart_lab, gender_age) %>%
+            subset(select=c(Heart_rate_day2, 
+                            creatinine_day2,
+                            SBP_day2,
+                            DBP_day2,
+                            platelet_count_day2,
+                            GCS_E_day2,
+                            GCS_V_day2,
+                            GCS_M_day2,
+                            pulse_ox_day2,
+                            hemoglobin_day2,
+                            hematocrit_day2,
+                            GCS_day2, MAP_day2, INR_day2, PTT_day2,
+                            RBC_count_day2, BUN_day2, pupil_r_day2, 
+                            pupil_l_day2, Coagulopathy_day2,
+                            Coagulopathy_bin_day2, pupil_reactivity_day2
+                            ))
+
+# write.csv(TBI_final_day2, "/Users/plamena/Desktop/mimic-iv-2.2/TBI_data_day2")
+
+Full_data <- read.csv("/Users/plamena/Desktop/mimic-iv-2.2/TBI_data_icu1")
+day2 <- read.csv("/Users/plamena/Desktop/mimic-iv-2.2/TBI_data_day2")
+
+TBI_data_arrival <- read.csv("/Users/plamena/Desktop/mimic-iv-2.2/TBI_data_arrival")
+  
+TBI_day1_2 <- left_join(Full_data, day2)
+TBI_data <- left_join(TBI_day1_2, TBI_data_arrival, by=c("hadm_id" = "hadm_id"))
+
+TBI_data$alive_at24 <- ifelse(TBI_data$hospital_expire_flag.x == 1 &
+                                TBI_data$los < 1, 0, 
+                         ifelse(TBI_data$hospital_expire_flag.x == 0, 1, 
+                         ifelse(TBI_data$hospital_expire_flag.x == 1 &
+                                TBI_data$los >= 1, 1, NA))) 
+
+TBI_data$Survival <- ifelse(TBI_data$Mortality.x == "no", "Lived",
+                    ifelse(TBI_data$Mortality.x == "yes", "Died", NA))
+
+
+
+```
+
+```{r}
+TBI_data$extended_stay <- ifelse(TBI_data$los >= 10,
+                                  "yes",
+                            ifelse(TBI_data$los < 10,
+                                  "no", NA))
+TBI_data$dead_at24hrs <- ifelse(TBI_data$Mortality.x == "yes" &
+                                TBI_data$los < 1, "yes", 
+                         ifelse(TBI_data$Mortality.x == "no", "no", 
+                         ifelse(TBI_data$Mortality.x == "yes" &
+                                TBI_data$los >= 1, "no", NA))) 
+
+TBI_data$dead_at24hrs_cat <- ifelse(TBI_data$dead_at24hrs == "yes", 1,
+                               ifelse(TBI_data$dead_at24hrs == "no", 0, NA))
+
+TBI_data$dead_at24hrs_cat2 <- ifelse(TBI_data$dead_at24hrs == "yes", "Died",
+                               ifelse(TBI_data$dead_at24hrs == "no", "Lived", NA))
+
+TBI_data$Coagulopathy <- ifelse((TBI_data$platelet_count < 100) | (TBI_data$INR >= 1.4) | (TBI_data$PTT > 37), "Coagulopathy",
+                             ifelse((TBI_data$platelet_count >= 100) & (TBI_data$INR < 1.4) & (TBI_data$PTT <= 37), "No coagulopathy", NA))
+
+TBI_data$Coagulopathy_bin <- ifelse(TBI_data$Coagulopathy == "Coagulopathy", 1, 
+                         ifelse(TBI_data$Coagulopathy == "No coagulopathy", 0, NA))
+
+TBI_data$Neutro_lymph_ratio <- TBI_data$Neutrophil/TBI_data$Lymphocytes
+TBI_data$plate_lymph_ratio <- TBI_data$platelet_count/TBI_data$Lymphocytes
+
+# write.csv(TBI_data, "/Users/plamena/Desktop/mimic-iv-2.2/TBI_data_all")
+# TBI_day1_2$alive_at24
+#table(df$dead_at24hrs)
+```
+
+```{r}
+# rm(list = ls())
+TBI_data <- read.csv("/Users/plamena/Desktop/mimic-iv-2.2/TBI_data_all")
+```
+
+
