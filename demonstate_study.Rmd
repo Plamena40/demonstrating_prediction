@@ -1,0 +1,987 @@
+---
+fontsize: 10pt
+geometry: margin=0.5cm
+graphics: yes
+mainfont: Times New Roman
+output:
+  pdf_document:
+    keep_tex: no
+    number_sections: yes
+  word_document: default
+---
+
+```{r, echo=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = FALSE)
+# knitr::opts_knit$set(root.dir = "/Users/plamena/Desktop/mimic-iv-2.2/TBI_data_all")
+```
+
+```{r test_image,  echo = FALSE, out.width = '90%', out.height = '50%', fig.align = 'left'}
+knitr::include_graphics("uchicago_logo.png")
+
+# rm(list=ls())
+```
+
+\large__Predicting Mortality at 24 Hours in Moderate to Severe Traumatic Brain Injury Patients:__
+\newline
+\large__A Comparison of Several Machine Learning Methods__
+\begin{tabular}{@{}ll}
+Investigator(s): & Plamena P. Powla, MS; Farima Fakhri, MD; Samantha Jankowski, BS; \\
+& Ali Mansour, MD; Eric Polley, PhD\\
+Analyst: & Plamena P. Powla, MS\\
+Date: & `r format(Sys.time(), '%B %d, %Y')`\\
+\end{tabular}
+\newline \newline 
+
+<!-- Add a horizontal line -->
+\noindent\rule{\textwidth}{1pt}
+
+<!-- Add table of contents -->
+\tableofcontents
+
+\
+
+\newpage
+# Summary and Descriptive table
+
+Filter to patients who were not dead on arrival, GCS <= 12, and not missing the components of the IMPACT-Core model (GCS M, pupillary reactivity, age). 
+\newline
+\newline
+Assess the discrimination and calibration of several models including LR, SDA, LDA, GAM, random forest, XGBoost and select probability threshold that maximizes specificity after reaching 90% sensitivity.
+\newline
+\newline
+Evaluate the performance of model at selected threshold by reporting sensitivity and specificity. 
+\newline \newline
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F) 
+# this removes the code used from the html output
+# make a REDCap calculation that measures the time a pt spend in the NICU.
+```
+
+```{r, warning=F, message = FALSE}
+library(dplyr)
+library(tidyr)
+library(MLeval)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(ggplot2)
+library(gtsummary)
+library(caret)
+library(pROC)
+library(ROCR)
+library(ROSE)
+library(xgboost)
+library(randomForest)
+library(ResourceSelection)
+library(PresenceAbsence)
+library(ggthemes)
+library(gridExtra)
+library(sda)
+library(gam)
+library(flextable, warn.conflicts = FALSE)
+library(rms)
+library(CalibrationCurves)
+```
+
+```{r}
+# rm(list = ls())
+TBI_data <- read.csv("/Users/plamena/Desktop/mimic-iv-2.2/TBI_data_all")
+```
+
+```{r}
+df <- TBI_data %>% filter(!GCS_arrival >= 13) %>% 
+  filter(!is.na(pupil_reactivity_arrival)) %>% 
+  filter(!is.na(anchor_age.x)) %>% 
+  filter(!is.na(GCS_M_arrival)) %>% filter(!is.na(dead_at24hrs))
+```
+
+**Table 1. Admission characteristics of moderate and severe blunt TBI patients stratified by their survival status at 24 hours**
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+subset(df, 
+       select = c(dead_at24hrs_cat2, anchor_age.x, gender.x, GCS_arrival, 
+                  GCS_M_arrival, pupil_reactivity)) %>% 
+                mutate(pupil_reactivity = factor(pupil_reactivity,
+                       levels = c("Reactive", "One-fixed", "Non-reactive"))) %>%
+                mutate(dead_at24hrs_cat2 = factor(dead_at24hrs_cat2,
+                       levels = c("Lived", "Died"))) %>%
+                gtsummary::tbl_summary(
+                  dead_at24hrs_cat2,
+                  percent = "column", 
+                  statistic = list(all_continuous() ~ "{median} ({p25}, {p75})", 
+                     all_categorical() ~ "{n} ({p}%)"),
+                  type = list(GCS_M_arrival ~ "continuous"),
+                  missing = "no",
+                  missing_text = "(Missing)",
+                  digits=list(all_continuous() ~ c(0, 1), all_categorical() ~ c(0, 1)),
+                  label = list(
+                  gender.x ~ "Gender",
+                  anchor_age.x ~ "Age",
+                  GCS_arrival ~ "Total GCS",
+                  GCS_M_arrival ~ "Motor GCS",
+                  pupil_reactivity ~ "Pupillary reactivity")) %>%
+                gtsummary::modify_header(label = "**Characteristic**") %>%
+                gtsummary::bold_labels() %>%
+                gtsummary::add_overall() %>%
+               # gtsummary::add_p() %>%
+                gtsummary::as_flex_table() %>%
+                flextable::autofit() %>%
+                flextable::theme_vanilla() %>%
+             #   flextable::bg(bg = "#b3b3e6", part = "header") %>%
+                flextable::bg(bg = "#e0e0eb", i = c(1,2,5,6,7)) %>%
+                flextable::bg(bg = "#f0f0f5", i = c(3,4,8,9,10))
+```
+\newpage 
+
+# Training control
+```{r, echo=T}
+#classWeights <- ifelse(df$dead_at24hrs == "yes",
+  #                     (1/table(df$dead_at24hrs)[1])*.5,
+  #                     (1/table(df$dead_at24hrs)[2])*(1-.5))
+## LOOCV
+ctrl <- trainControl(method = "LOOCV",
+                     classProbs = TRUE, summaryFunction = twoClassSummary,
+                     verboseIter = T, savePredictions = T, returnResamp = "final")
+# ctrl$sampling <- "smote"
+```
+\newpage 
+
+# Logistic Regression
+```{r, warning=F, message=F, include=F}
+set.seed(8918)
+
+log_mod <- train(dead_at24hrs ~ GCS_M_arrival + 
+                   pupil_reactivity_arrival + anchor_age.x, 
+               data = df, method = "glm", family = "binomial",
+               trControl = ctrl, metric = "ROC",
+               preProcess = c("center","scale") #, weights = classWeights
+               )
+
+# print(log_mod)
+log_mod_ev <- evalm(log_mod)
+# log_mod_ev$stdres # AUROC
+
+## extracting predictions of left out fold
+log_pred <- log_mod$pred
+df$log_pred <- log_pred[,"yes"]
+
+## Brier score
+Brier <- mean((df$log_pred - df$dead_at24hrs_cat)^2)
+
+## HL with 10 bins
+hl_test <- hoslem.test(df$dead_at24hrs_cat, df$log_pred, g=10)
+
+## calculating probability threshold 
+my_roc_log_pred <- roc(df$dead_at24hrs_cat, df$log_pred)
+#opt_threshold_log_pred <- coords(my_roc_log_pred, "best", ret = "threshold",best.method = "closest.topleft")[1,]
+
+# coords(my_roc_log_pred, "all", transpose = FALSE)
+# Looking at sensitivity and specificity at all thresholds
+
+## evaluation metrics at optimal probability threshold
+df$optimal_threshold_pred_log_pred <- ifelse(df$log_pred >= 0.169442777, 1, 0)
+# predict(log_mod, df, type="prob")[,"yes"]
+```
+
+## Evaluation metrics
+AUC-ROC	$0.838$ \newline
+Hosmer Lemeshow: `r round(hl_test$statistic, 2)` (p-value $=$ `r round(hl_test$p.value, 3)`) \newline
+Average predicted risk: `r mean(df$log_pred)`
+
+## Figures
+**Figure 1. ROC and Calibration Curves for Logistic Regression**
+\newline
+```{r, warning=F, message=F}
+roc1 <- ggroc(my_roc_log_pred, color = "steelblue", size = 1) +
+  theme_minimal() + 
+  labs(y= "Sensitivity", x = "Specificity") + 
+  theme(axis.text.x = element_text(vjust = +3)) + 
+  theme(axis.text.y = element_text(hjust = -10)) +
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  annotate("text", x=.40, y=.1, label= "AUC = 0.838", size = 4) + 
+  ggtitle("LR") + theme(plot.title = element_text(hjust = 0.5))
+
+calibration1 <- subset(df, select = c(log_pred, dead_at24hrs_cat))
+# This is a dataset with only the predicted values and observed survival
+
+cal1 <- ggplot(calibration1, aes(log_pred, dead_at24hrs_cat)) +
+  geom_point(shape = 5, size = 1.5) +
+  geom_abline(slope = 1, intercept = 0) +
+  geom_smooth(method = "glm", 
+              method.args = list(family = "binomial"), 
+              se=FALSE, color = "steelblue") +
+  scale_x_continuous(breaks = seq(0, 1, 0.1)) +
+  scale_y_continuous(breaks = seq(0, 1, 0.1)) +
+  xlab("Expected Probability") +
+  ylab("Observed Probability") + 
+  theme_minimal()
+
+grid.arrange(roc1, cal1, ncol=2, widths = c(8, 8), heights = c(20, 20))
+# ggsave("Figure1.jpg", Grid1, width = 12, height = 6.5)
+```
+\newline
+Left: Area under ROC curve using logistic regression to predict early mortality in TBI
+\newline Right: Calibration plot depicting predicted risk against observed risk of early mortality using the logistic regression model
+\newline
+
+## Optimal probability threshold
+The optimal probability threshold is 0.169442777.
+```{r, fig.height=3}
+conf1 <- confusionMatrix(data=as.factor(df$optimal_threshold_pred_log_pred), 
+                reference = as.factor(df$dead_at24hrs_cat))
+conf1$byClass
+```
+\newpage 
+
+# Linear Discriminant Analysis
+```{r, warning=F, message=F, include=F}
+set.seed(8918)
+
+lda_mod <- train(dead_at24hrs ~ GCS_M_arrival + 
+                   pupil_reactivity_arrival + anchor_age.x, 
+               data = df, method = "lda", metric = "ROC",
+               trControl = ctrl,
+               preProcess = c("center","scale") #, weights = classWeights
+               )
+
+#print(lda_mod)
+lda_mod_ev <- evalm(lda_mod)
+#lda_mod_ev$stdres
+
+## extracting predictions of left out fold
+lda_pred <- lda_mod$pred
+df$lda_pred <- lda_pred[,"yes"]
+
+## Brier score
+Brier <- mean((df$lda_pred - df$dead_at24hrs_cat)^2)
+## HL
+hl_test <- hoslem.test(df$dead_at24hrs_cat, df$lda_pred, g=10)
+
+## calculating probability threshold 
+my_roc_lda_mod <- roc(df$dead_at24hrs_cat, df$lda_pred)
+#opt_threshold_lda_mod <- coords(my_roc_lda_mod, "best", ret = "threshold",best.method = "closest.topleft")[1,]
+
+# coords(my_roc_lda_mod, "all", transpose = FALSE)
+# Looking at sensitivity and specificity at all thresholds
+
+## evaluation metrics at optimal probability threshold
+df$optimal_threshold_pred_lda_mod <- ifelse(df$lda_pred >= 0.385194803, 1, 0)
+```
+## Evaluation metrics
+AUC-ROC	$0.854$ \newline
+Hosmer Lemeshow: `r round(hl_test$statistic, 2)` (p-value $=$ `r round(hl_test$p.value, 3)`) \newline
+Average predicted risk: `r mean(df$lda_pred)`
+\newline
+
+## Figures
+**Figure 2. ROC and Calibration Curves for Linear Discriminant Analysis**
+\newline
+```{r, warning=F, message=F}
+roc2 <- ggroc(my_roc_lda_mod, color = "steelblue", size = 1) +
+  theme_minimal() + 
+  scale_fill_hc() +
+  labs(y= "Sensitivity", x = "Specificity", 
+       caption = "") + 
+  theme(axis.text.x = element_text(vjust = +3)) + 
+  theme(axis.text.y = element_text(hjust = -10)) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  annotate("text", x=.40, y=.1, label= "AUC = 0.854", size = 4) + 
+  ggtitle("LDA") + theme(plot.title = element_text(hjust = 0.5))
+
+calibration2 <- subset(df, select = c(lda_pred, dead_at24hrs_cat))
+# This is a dataset with only the predicted values and observed survival
+
+cal2 <- ggplot(calibration2, aes(lda_pred, dead_at24hrs_cat)) +
+  geom_point(shape = 5, size = 1.5) +
+  geom_abline(slope = 1, intercept = 0) +
+  geom_smooth(method = "glm", 
+              method.args = list(family = "binomial"), 
+              se=FALSE, color = "steelblue") +
+  scale_x_continuous(breaks = seq(0, 1, 0.1)) +
+  scale_y_continuous(breaks = seq(0, 1, 0.1)) +
+  xlab("Expected Probability") +
+  ylab("Observed Probability") + 
+  theme_minimal()
+
+grid.arrange(roc2, cal2, ncol=2, widths = c(8, 8), heights = c(20, 20))
+```
+\newline 
+Left: Area under ROC curve using linear discriminant analysis to predict early mortality in TBI
+\newline 
+Right: Calibration plot depicting predicted risk against observed risk of early mortality using the linear discriminant analysis model
+\newline
+
+## Optimal probability threshold
+The optimal probability threshold is 0.385194803.
+```{r}
+conf2 <- confusionMatrix(data=as.factor(df$optimal_threshold_pred_lda_mod), 
+                reference = as.factor(df$dead_at24hrs_cat)) 
+
+conf2$byClass
+```
+\newpage 
+
+# Shrinkage Discriminant Analysis
+```{r, warning=F, message=F, include=F}
+set.seed(8918)
+
+sdaGrid <- expand.grid(lambda=c(0, .5, 1), diagonal=c(TRUE, FALSE))
+
+sda_mod <- train(dead_at24hrs ~ GCS_M_arrival + 
+                   pupil_reactivity_arrival + anchor_age.x, 
+               data = df, method = "sda", tuneGrid = sdaGrid,
+               trControl = ctrl, metric = "ROC",
+               preProcess = c("center","scale") #, weights = classWeights
+               )
+
+#print(sda_mod)
+sda_mod_ev <- evalm(sda_mod)
+#sda_mod_ev$stdres
+
+## extracting predictions of left out fold
+sda_pred <- sda_mod$pred %>% filter(diagonal=="FALSE" & lambda=="0.5")
+df$sda_pred <- sda_pred[,"yes"]
+
+## Brier score
+Brier <- mean((df$sda_pred - df$dead_at24hrs_cat)^2)
+## HL
+hl_test <- hoslem.test(df$dead_at24hrs_cat, df$sda_pred, g=10)
+
+## calculating probability threshold 
+my_roc_sda_mod <- roc(df$dead_at24hrs_cat, df$sda_pred)
+#opt_threshold_sda_mod <- coords(my_roc_sda_mod, "best", ret = "threshold",best.method = "closest.topleft")[1,]
+
+# coords(my_roc_sda_mod, "all", transpose = FALSE)
+# Looking at sensitivity and specificity at all thresholds
+
+## evaluation metrics at optimal probability threshold
+df$optimal_threshold_pred_sda_mod <- ifelse(df$sda_pred >= 0.21284795, 1, 0)
+```
+## Evaluation metrics
+AUC-ROC	$0.863$ \newline
+Hosmer Lemeshow: `r round(hl_test$statistic, 2)` (p-value $=$ `r round(hl_test$p.value, 3)`) \newline
+Average predicted risk: `r mean(df$sda_pred)`
+\newline
+
+## Figures
+**Figure 3. ROC and Calibration Curves for Shrinkage Discriminant Analysis**
+\newline
+```{r, warning=F, message=F}
+roc3 <- ggroc(my_roc_sda_mod, color = "steelblue", size = 1) + 
+  theme_minimal() + 
+  scale_fill_economist() +
+  labs(y= "Sensitivity", x = "Specificity", 
+       caption = "") + 
+  theme(axis.text.x = element_text(vjust = +3)) + 
+  theme(axis.text.y = element_text(hjust = -10)) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  annotate("text", x=.40, y=.1, label= "AUC = 0.863", size = 4) + 
+  ggtitle("SDA") + theme(plot.title = element_text(hjust = 0.5))
+
+calibration3 <- subset(df, select = c(sda_pred, dead_at24hrs_cat))
+# This is a dataset with only the predicted values and observed survival
+
+cal3 <- ggplot(calibration3, aes(sda_pred, dead_at24hrs_cat)) +
+  geom_point(shape = 5, size = 1.5) +
+  geom_abline(slope = 1, intercept = 0) +
+  geom_smooth(method = "glm", 
+              method.args = list(family = "binomial"), 
+              se=FALSE, color = "steelblue") +
+  scale_x_continuous(breaks = seq(0, 1, 0.1)) +
+  scale_y_continuous(breaks = seq(0, 1, 0.1)) +
+  xlab("Expected Probability") +
+  ylab("Observed Probability") + 
+  theme_minimal()
+
+grid.arrange(roc3, cal3, ncol=2, widths = c(8, 8), heights = c(20, 20))
+```
+\newline 
+Left: Area under ROC curve using shrinkage discriminant analysis to predict early mortality in TBI
+\newline 
+Right: Calibration plot depicting predicted risk against observed risk of early mortality using the shrinkage discriminant analysis model
+\newline
+
+## Optimal probability threshold
+The optimal probability threshold is 0.21284795.
+```{r}
+conf3 <- confusionMatrix(data=as.factor(df$optimal_threshold_pred_sda_mod), 
+                reference = as.factor(df$dead_at24hrs_cat)) 
+
+conf3$byClass
+```
+\newpage
+
+# Random Forest
+```{r, warning=F, message=F, include=F}
+set.seed(8918)
+
+rf_grid <- expand.grid(mtry=c(1, 2, 3))
+
+rf_mod <- train(dead_at24hrs ~ GCS_M_arrival + 
+                   pupil_reactivity_arrival + anchor_age.x, 
+               data = df, method = "rf", metric = "ROC",
+               trControl = ctrl, tuneGrid = rf_grid,
+               preProcess = c("center","scale") # , weights = classWeights
+               )
+
+#print(rf_mod)
+rf_mod_ev <- evalm(rf_mod)
+rf_mod_ev$roc
+#rf_mod_ev$stdres
+
+## extracting predictions of left out folds
+rf_pred <- rf_mod$pred %>% filter(mtry==3)
+df$rf_pred <- rf_pred[,"yes"]
+
+## Brier score
+Brier <- mean((df$rf_pred - df$dead_at24hrs_cat)^2)
+## HL
+hl_test <- hoslem.test(df$dead_at24hrs_cat, df$rf_pred, g=10)
+
+## calculating probability threshold 
+my_roc_rf_mod <- roc(df$dead_at24hrs_cat, df$rf_pred)
+# opt_threshold_rf_mod <- coords(my_roc_rf_mod, "best", ret = "threshold",best.method = "closest.topleft")[1,]
+
+# coords(my_roc_rf_mod, "all", transpose = FALSE)
+# Looking at sensitivity and specificity at all thresholds
+
+## evaluation metrics at optimal probability threshold
+df$optimal_threshold_pred_rf_mod <- ifelse(df$rf_pred >= 0.198, 1, 0)
+```
+## Evaluation metrics
+AUC-ROC	$0.849$ \newline
+Hosmer Lemeshow: `r round(hl_test$statistic, 2)` (p-value $=$ `r round(hl_test$p.value, 3)`) \newline
+Average predicted risk: `r mean(df$rf_pred)`
+\newline
+
+## Figures
+**Figure 4. ROC and Calibration Curves for Random Forest**
+\newline
+```{r, warning=F, message=F}
+roc4 <- ggroc(my_roc_rf_mod, color = "steelblue", size = 1) +
+  theme_minimal() + 
+  scale_fill_economist() +
+  labs(y= "Sensitivity", x = "Specificity", 
+       caption = "") + 
+  theme(axis.text.x = element_text(vjust = +3)) + 
+  theme(axis.text.y = element_text(hjust = -10)) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  annotate("text", x=.40, y=.1, label= "AUC = 0.849", size = 4) + 
+  ggtitle("RF") + theme(plot.title = element_text(hjust = 0.5))
+
+calibration4 <- subset(df, select = c(rf_pred, dead_at24hrs_cat))
+# This is a dataset with only the predicted values and observed survival
+
+cal4 <- ggplot(calibration4, aes(rf_pred, dead_at24hrs_cat)) +
+  geom_point(shape = 5, size = 1.5) +
+  geom_abline(slope = 1, intercept = 0) +
+  geom_smooth(method = "glm", 
+              method.args = list(family = "binomial"), 
+              se=FALSE, color = "steelblue") +
+  scale_x_continuous(breaks = seq(0, 1, 0.1)) +
+  scale_y_continuous(breaks = seq(0, 1, 0.1)) +
+  xlab("Expected Probability") +
+  ylab("Observed Probability") + 
+  theme_minimal()
+
+grid.arrange(roc4, cal4, ncol=2, widths = c(8, 8), heights = c(20, 20))
+```
+\newline 
+Left: Area under ROC curve using random forest to predict early mortality in TBI
+\newline 
+Right: Calibration plot depicting predicted risk against observed risk of early mortality using the random forest model
+\newline
+
+## Optimal probability threshold
+The optimal probability threshold is 0.198.
+```{r}
+conf4 <- confusionMatrix(data=as.factor(df$optimal_threshold_pred_rf_mod), 
+                reference = as.factor(df$dead_at24hrs_cat)) 
+
+conf4$byClass
+```
+\newpage
+
+# XGBoost
+```{r, warning=F, message=F, include=F}
+set.seed(8918)
+
+xgbGrid <- expand.grid(nrounds = c(10, 11, 12, 13, 14, 15, 16), 
+                       max_depth = 4:6,
+                       eta = c(.3,.4),
+                       colsample_bytree = 1,
+                       min_child_weight = c(0),
+                       subsample = c(.75, .9),
+                       gamma = c(0, .1))
+
+xgb_mod <- train(dead_at24hrs ~ GCS_M_arrival + 
+                   pupil_reactivity_arrival + anchor_age.x, 
+               data = df, method = "xgbTree", metric = "ROC",
+               trControl = ctrl, tuneGrid = xgbGrid, 
+               preProcess = c("center","scale"))
+
+#print(xgb_mod)
+xgb_mod_ev <- evalm(xgb_mod)
+#xgb_mod_ev$stdres
+
+## extracting predictions of left out folds
+xgb_pred <- xgb_mod$pred %>% filter(eta=="0.4" & nrounds=="16" & 
+                                   max_depth=="6" & gamma=="0.1",
+                                   subsample=="0.75")
+df$xgb_pred <- xgb_pred[,"yes"]
+
+## Brier score
+Brier <- mean((df$xgb_mod - df$dead_at24hrs_cat)^2)
+## HL
+hl_test <- hoslem.test(df$dead_at24hrs_cat, df$xgb_pred, g=10)
+
+## calculating probability threshold 
+my_roc_xgb_mod <- roc(df$dead_at24hrs_cat, df$xgb_pred)
+#opt_threshold_xgb_mod <- coords(my_roc_xgb_mod, "best", ret = "threshold", best.method = "closest.topleft")[1,]
+
+# coords(my_roc_xgb_mod, "all", transpose = FALSE)
+# Looking at sensitivity and specificity at all thresholds
+
+## evaluation metrics at optimal probability threshold
+# df$optimal_threshold_pred_xgb_mod <- ifelse(df$xgb_pred >= opt_threshold_xgb_mod, 1, 0)
+df$optimal_threshold_pred_xgb_mod <- ifelse(df$xgb_pred >= 0.123406857, 1, 0)
+```
+## Evaluation metrics
+AUC-ROC	$0.879$ \newline
+Hosmer Lemeshow: `r round(hl_test$statistic, 2)` (p-value $=$ `r round(hl_test$p.value, 3)`) \newline
+Average predicted risk: `r mean(df$xgb_pred)`
+\newline
+
+## Figures
+**Figure 5. ROC and Calibration Curves for XGBoost**
+\newline
+```{r, warning=F, message=F}
+roc5 <- ggroc(my_roc_xgb_mod, color = "steelblue", size = 1) +
+  theme_minimal() + 
+  scale_fill_economist() +
+  labs(y= "Sensitivity", x = "Specificity", 
+       caption = "") + 
+  theme(axis.text.x = element_text(vjust = +3)) + 
+  theme(axis.text.y = element_text(hjust = -10)) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  annotate("text", x=.40, y=.1, label= "AUC = 0.879", size = 4) + 
+  ggtitle("XGB") + theme(plot.title = element_text(hjust = 0.5))
+
+calibration5 <- subset(df, select = c(xgb_pred, dead_at24hrs_cat))
+# This is a dataset with only the predicted values and observed survival
+
+cal5 <- ggplot(calibration5, aes(xgb_pred, dead_at24hrs_cat)) +
+  geom_point(shape = 5, size = 1.5) +
+  geom_abline(slope = 1, intercept = 0) +
+  geom_smooth(method = "glm", 
+              method.args = list(family = "binomial"), 
+              se=FALSE, color = "steelblue") +
+  scale_x_continuous(breaks = seq(0, 1, 0.1)) +
+  scale_y_continuous(breaks = seq(0, 1, 0.1)) +
+  xlab("Expected Probability") +
+  ylab("Observed Probability") + 
+  theme_minimal()
+
+grid.arrange(roc5, cal5, ncol=2, widths = c(8, 8), heights = c(20, 20))
+```
+\newline
+Left: Area under ROC curve using XGBoost to predict early mortality in TBI
+\newline 
+Right: Calibration plot depicting predicted risk against observed risk of early mortality using the XGBoost model
+\newline
+
+## Optimal probability threshold
+The optimal probability threshold is 0.123406857.
+```{r}
+conf5 <- confusionMatrix(data=as.factor(df$optimal_threshold_pred_xgb_mod), 
+                reference = as.factor(df$dead_at24hrs_cat)) 
+
+conf5$byClass
+```
+\newpage
+
+## Bootstrapped predictions
+```{r, eval = FALSE}
+set.seed(8918)
+sample <- list(NULL)
+xgb_mod_boot <- list(NULL)
+xgb_mod_pred_boot <- list(NULL)
+xgb_pred_boot <- NULL
+xgb_pred_df_boot <- NULL
+xgb_pred_df_boot <- data.frame(hadm_id=df$hadm_id)
+xgb_pred_df_boot_means <- data.frame(matrix(c(1:401), nrow = 401))
+
+xgbGrid <- expand.grid(nrounds = c(10, 11, 12, 13, 14, 15, 16), 
+                       max_depth = 4:6,
+                       eta = c(.3,.4),
+                       colsample_bytree = 1,
+                       min_child_weight = c(0),
+                       subsample = c(.75, .9),
+                       gamma = c(0, .1))
+
+
+for (i in 1:200){
+  sample <- df[sample(1:nrow(df), size=nrow(df), replace=T),]
+  test <- df[-sample(1:nrow(df), size=nrow(df), replace=T),]
+  xgb_mod_boot[[i]] <- train(dead_at24hrs ~ GCS_M_arrival + 
+                                            pupil_reactivity_arrival + 
+                                            anchor_age.x, 
+                         data = sample, 
+                         method = "xgbTree",
+                         trControl = ctrl, 
+                         tuneGrid = xgbGrid,
+                         preProcess = c("center","scale"))
+  
+  xgb_mod_pred_boot[[i]] <- predict(xgb_mod_boot[[i]], newdata = test, type = "prob")
+  xgb_pred_boot[[i]] <- data.frame(xgb_mod_pred_boot[[i]][,"yes"])
+  xgb_pred_boot[[i]]$hadm_id <- test$hadm_id
+  xgb_pred_df_boot <- full_join(xgb_pred_df_boot, xgb_pred_boot[[i]], by = "hadm_id")
+}
+
+names(xgb_pred_df_boot)[2:ncol(xgb_pred_df_boot)]<- paste0(rep("X", each=1),1:200)
+
+#xgb_pred_df_boot_means$prediction_mean <- rowMeans(xgb_pred_df_boot, na.rm = TRUE)
+#xgb_pred_df_boot_means$prediction_sd <- apply(xgb_pred_df_boot, 1, sd)  
+#xgb_pred_df_boot_means$lower_bound <- #xgb_pred_df_boot_means$prediction_mean-1.96*xgb_pred_df_boot_means$prediction_sd
+#xgb_pred_df_boot_means$upper_bound <- #xgb_pred_df_boot_means$prediction_mean+1.96*xgb_pred_df_boot_means$prediction_sd
+#xgb_pred_df_boot_means$original_pred <- df$xgb_pred
+
+write.csv(xgb_pred_df_boot, "/Users/plamena/Desktop/mimic-iv-2.2/xgb_pred_df_200boot_loocv.csv")
+#write.csv(xgb_pred_df_boot_means, "/Users/plamena/Desktop/mimic-iv-2.2/xgb_pred_df_200boot_loocv_means.csv")
+
+
+xgb_pred_long200 <- gather(xgb_pred_df_boot, boot, prediction, X1:X200, factor_key=TRUE)
+xgb_pred_df_boot$X <- df$xgb_pred
+xgb_pred_df_boot$Y <- df$dead_at24hrs_cat
+write.csv(xgb_pred_long200, "/Users/plamena/Desktop/mimic-iv-2.2/xgb_pred_long200.csv")
+```
+
+```{r}
+xgb_pred_df_boot <- read.csv("/Users/plamena/Desktop/mimic-iv-2.2/xgb_pred_df_200boot_loocv.csv")
+#xgb_pred_df_boot_means <- read.csv("/Users/plamena/Desktop/mimic-iv-2.2/xgb_pred_df_200boot_loocv_means.csv")
+xgb_pred_long <- read.csv("/Users/plamena/Desktop/mimic-iv-2.2/xgb_pred_long200.csv")
+xgb_pred_long$X <- df$xgb_pred
+xgb_pred_long$Y <- df$dead_at24hrs_cat
+
+xgb_pred_df_boot <- xgb_pred_df_boot[-2]
+```
+
+### Prediction instability plot
+```{r, warning=FALSE}
+xgb_pred_long %>%
+  ggplot(aes(X, prediction)) +
+         geom_point(alpha=.1, color="steelblue") +
+         geom_smooth(method="gam", span = 1, formula = y ~ s(x, bs = "cs"),
+                     color = "black", linetype="dotted") + 
+         xlab("Estimated risk from developed model") +
+         ylab("Estimated risk from bootstrap models") + 
+         scale_x_continuous(breaks=seq(0,.85,by=.05)) +
+         scale_y_continuous(breaks=seq(0,1,by=.05)) +
+         geom_abline(slope = 1, intercept = 0) +
+         theme_minimal() +
+         theme(plot.margin = unit(c(1,1,1,1),"cm"))
+```
+
+### Calibration instability plot
+```{r, warning=FALSE}
+ggplot() +
+  geom_smooth(data = xgb_pred_long, aes(x = prediction, y = Y, group = boot), 
+              method = "glm",
+              method.args = list(family = "binomial"), formula = "y ~ x",
+              se = FALSE, color="#707070", size=.25) +
+  scale_x_continuous(breaks = seq(0, 1, 0.1)) +
+  scale_y_continuous(breaks = seq(0, 1, 0.1)) +
+  xlab("Estimated risk of original (dotted) and bootstrap (solid) models") +
+  ylab("Observed outcome in original dataset") + 
+  theme_minimal() +
+  geom_smooth(data=calibration5, mapping=aes(xgb_pred, dead_at24hrs_cat), 
+              method = "glm", 
+              method.args = list(family = "binomial"),  formula = "y ~ x",
+              se = FALSE, color = "black", linetype = "dotted") + 
+  geom_abline(slope = 1, intercept = 0) +
+  theme(plot.margin = unit(c(1,1,1,1),"cm"))
+```
+
+### Mean absolute predictor error (MAPE) plot
+```{r, warning=FALSE}
+difference <- list(NULL)
+differences_df <- data.frame(matrix(NA, nrow = 401))
+individual_MAPE_df <- data.frame(matrix(NA, nrow = 401))
+MAPE_df <- data.frame(matrix(NA, nrow = 401))
+xgb_pred_df_boot$X <- df$xgb_pred
+
+for (i in 1:200){
+  difference[[i]] <- abs(xgb_pred_df_boot[,i]-xgb_pred_df_boot[201])
+  differences_df <- cbind(differences_df, difference[[i]]$X)
+}
+
+differences_df <- differences_df[-1]
+
+individual_MAPE_df <- gather(as.data.frame.list(rowMeans(differences_df, na.rm=T)))
+individual_MAPE <- individual_MAPE_df$value
+
+average_MAPE <- mean(individual_MAPE, na.rm=T)
+MAPE_df$individual_MAPE <- individual_MAPE
+MAPE_df$original_pred <- df$xgb_pred
+
+ggplot(MAPE_df, aes(original_pred, individual_MAPE)) +
+         geom_point(alpha=.5) +
+         xlab("Estimated risk from developed model") +
+         ylab("MAPE") + 
+         scale_x_continuous(breaks=seq(0,.8,by=.05)) +
+         scale_y_continuous(breaks=seq(0,1,by=.05)) +
+         theme_minimal() +
+         theme(plot.margin = unit(c(1,1,1,1),"cm")) +
+         geom_hline(yintercept=0.03884577, alpha=0.5) +
+         annotate("text", x=.65, y=.065, label= "Average MAPE = 0.03884577", size = 4)
+```
+\newline
+The average MAPE is `r average_MAPE`.
+
+\newpage
+
+# GAM (splines)
+```{r, warning=F, message=F, include=F}
+set.seed(8918)
+
+library(mgcv)
+
+df$pupil_reactivity_arrival_onefixed <- 
+  ifelse(df$pupil_reactivity_arrival == "One-fixed", 1, 0)
+
+df$pupil_reactivity_arrival_nonreative <- 
+  ifelse(df$pupil_reactivity_arrival == "Non-reactive", 1, 0)
+
+gam_mod <- train(dead_at24hrs ~ GCS_M_arrival + 
+                                pupil_reactivity_arrival_onefixed + 
+                                pupil_reactivity_arrival_nonreative +
+                                anchor_age.x, 
+               data = df, method = "gam",
+               trControl = ctrl,
+               preProcess = c("center","scale"))
+
+#print(gam_mod)
+gam_mod_ev <- evalm(gam_mod)
+#gam_mod_ev$stdres
+
+## extracting predictions of left out folds
+gam_pred <- gam_mod$pred %>% filter(select==FALSE)
+df$gam_pred <- gam_pred[,"yes"]
+
+## Brier score
+Brier <- mean((df$gam_pred - df$dead_at24hrs_cat)^2)
+## HL
+hl_test <- hoslem.test(df$dead_at24hrs_cat, df$gam_pred, g=10)
+
+## calculating probability threshold
+my_roc_gam_mod <- roc(df$dead_at24hrs_cat, df$gam_pred)
+# opt_threshold_gam_mod <- coords(my_roc_gam_mod, "best", ret = "threshold",best.method = "closest.topleft")[1,]
+
+# coords(my_roc_gam_mod, "all", transpose = FALSE)
+# Looking at sensitivity and specificity at all thresholds
+
+## evaluation metrics at optimal probability threshold
+df$optimal_threshold_pred_gam_mod <- ifelse(df$gam_pred >= 0.169439214, 1, 0)
+```
+## Evaluation metrics
+AUC-ROC	$0.840$ \newline
+Hosmer Lemeshow: `r round(hl_test$statistic, 2)` (p-value $=$ `r round(hl_test$p.value, 3)`) \newline
+Average predicted risk: `r mean(df$log_pred)`
+\newline
+
+## Figures
+**Figure 6. ROC and Calibration Curves for GAM**
+\newline
+```{r, warning=F, message=F}
+roc6 <- ggroc(my_roc_gam_mod, color = "steelblue", size = 1) +
+  theme_minimal() + 
+  scale_fill_hc() +
+  labs(y= "Sensitivity", x = "Specificity", 
+       caption = "") + 
+  theme(axis.text.x = element_text(vjust = +3)) + 
+  theme(axis.text.y = element_text(hjust = -10)) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  annotate("text", x=.40, y=.1, label= "AUC = 0.840", size = 4) + 
+  ggtitle("GAM") + theme(plot.title = element_text(hjust = 0.5))
+
+calibration6 <- subset(df, select = c(gam_pred, dead_at24hrs_cat))
+# This is a dataset with only the predicted values and observed survival
+
+cal6 <- ggplot(calibration6, aes(gam_pred, dead_at24hrs_cat)) +
+  geom_point(shape = 5, size = 1.5) +
+  geom_abline(slope = 1, intercept = 0) +
+  geom_smooth(method = "glm", 
+              method.args = list(family = "binomial"), 
+              se=FALSE, color = "steelblue") +
+  scale_x_continuous(breaks = seq(0, 1, 0.1)) +
+  scale_y_continuous(breaks = seq(0, 1, 0.1)) +
+  xlab("Expected Probability") +
+  ylab("Observed Probability") + 
+  ggtitle("GAM") + 
+  theme_minimal() + theme(plot.title = element_text(hjust = 0.5))
+
+grid.arrange(roc6, cal6, ncol=2, widths = c(8, 8), heights = c(20, 20))
+```
+\newline 
+Left: Area under ROC curve using generalized additive model to predict early mortality in TBI
+\newline 
+Right: Calibration plot depicting predicted risk against observed risk of early mortality using the generalized additive model
+\newline
+
+## Optimal probability threshold
+The optimal probability threshold is 0.169439214.
+```{r}
+conf6 <- confusionMatrix(data=as.factor(df$optimal_threshold_pred_gam_mod), 
+                reference = as.factor(df$dead_at24hrs_cat)) 
+
+conf6$byClass
+```
+\newpage
+
+# Tuning grid
+**Figure 7. Tuning grid of included model types**
+```{r, warning=FALSE, message=FALSE}
+Model_type <- c("LR", "LDA", "SDA", "RF", "XGBoost", "GAM")
+
+method <- c("glm", "lda", "sda", "rf", "xgbTree", "gam")
+
+tuneGrid <- c("", "", "lambda=c(0, .5, 1), diagonal=c(TRUE, FALSE)",
+              "mtry=c(1, 2, 3)", 
+              "nrounds=c(10, 11, 12, 13, 14, 15, 16), max_depth=4:6, eta=c(.3, .4), colsample_bytree=1, min_child_weight=0, subsample=c(.75, .9), gamma=c(0, .1)", "select=c(TRUE, FALSE)")
+
+df_table <- data.frame(Model_type, method, tuneGrid)
+
+flextable(df_table) %>%
+                flextable::autofit() %>%
+                flextable::theme_vanilla() %>%
+                flextable::bg(bg = "#b3b3e6", part = "header") %>%
+                width(width = 1, j=c(1)) %>%
+                width(width = .75, j=c(2)) %>%
+                width(width = 3.35, j=c(3)) %>%
+                flextable::bg(bg = "#f0f0f5", i = c(1,2,3,4,5,6)) %>%
+                set_header_labels(
+                  Model_type = "Model type",
+                  tuneGrid = "Hyperparameter values",
+                  method = "Algorithm"
+)
+
+```
+\newpage
+
+# Performance summary
+```{r, message=FALSE, warning=FALSE}
+Model_type <- c("LR",
+"LDA",
+"SDA",
+"RF",
+"XGB",
+"GAM")
+
+Hyperparameters <- c(" ",
+" ",
+"diagonal=FALSE, lambda=0.5",
+"mtry=3",
+"nrounds=16, max_depth=6, eta=0.4, gamma=0.1,  min_child_weight=0, subsample=0.75, colsample_bytree=1",
+"select=FALSE")
+
+AUROC <- c("0.838 (0.740-0.940)", "0.854 (0.750-0.950)", "0.863 (0.760-0.960)", "0.849 (0.750-0.950)", "0.879 (0.790-0.970)", "0.840 (0.740-0.940)")
+
+Calibration_intercept <- c("0 (-0.47, 0.46)", 
+                           "-0.78 (-1.29, -0.28)", 
+                           "-0.41 (-0.9, 0.08)", 
+                           "0.15 (-0.35, 0.65)", 
+                           "0.11 (-0.38, 0.61)", 
+                           "0 (-0.47, 0.46)")
+
+Calibration_slope <- c("0.61 (0.36, 0.86)", 
+                       "0.56 (0.38, 0.74)", 
+                       "0.68 (0.46, 0.91)", 
+                       "0.36 (0.21, 0.5)", 
+                       "0.76 (0.52, 1.0)", 
+                       "0.33 (0.08, 0.57)")
+
+Prob_theshold <- c("0.1694", "0.3852", "0.2128", "0.1980", "0.1234", "0.1694")
+
+Sensitivity <- c("0.910", "0.907", "0.905", "0.910", "0.907", "0.910")
+
+Specificity <- c("0.667", "0.667", "0.667", "0.417", "0.625", "0.667")
+
+df_table <- data.frame(Model_type, Hyperparameters, 
+                       AUROC, Calibration_intercept, Calibration_slope,
+                       Prob_theshold, Sensitivity, Specificity)
+```
+
+**Figure 8. Performance of selected models**
+```{r, message=FALSE, warning=FALSE}
+flextable(df_table) %>%
+                flextable::autofit() %>%
+                flextable::theme_vanilla() %>%
+                flextable::bg(bg = "#b3b3e6", part = "header") %>%
+                width(width = 1, j=c(1)) %>%
+                width(width = 1.75, j=c(2)) %>%
+                width(width = 1.6, j=c(3)) %>%
+                width(width = 1.45, j=c(4)) %>%
+                width(width = 1.45, j=c(5)) %>%
+                width(width = .9, j=c(6,7)) %>%
+                flextable::bg(bg = "#f0f0f5", i = c(1,2,3,4,5,6)) %>%
+                set_header_labels(
+                  Model_type = "Model type",
+                  AUROC = "AUROC (95% CI)",
+                  Calibration_intercept = "Calibration intercept (95% CI)",
+                  Calibration_slope = "Calibration slope (95% CI)",
+                  Prob_theshold = "Probability threshold"
+)
+```
+\newpage 
+
+# Calibration regression plots
+
+## LR
+```{r, warning=F, message=F}
+val.prob.ci.2(calibration1[,1], calibration1[,2])
+```
+\newpage 
+
+## LDA
+```{r, warning=F, message=F}
+val.prob.ci.2(calibration2[,1], calibration2[,2])
+```
+\newpage 
+
+## SDA
+```{r, warning=F, message=F}
+val.prob.ci.2(calibration3[,1], calibration3[,2])
+```
+\newpage 
+
+## RF
+```{r, warning=F, message=F}
+c1 <- calibration4[,1]
+c2 <- calibration4[,2]
+c <- data.frame(c1, c2)
+
+c$c1 <- c$c1+0.00001
+val.prob.ci.2(c$c1, c$c2)
+```
+\newpage 
+
+## XGB
+```{r, warning=F, message=F}
+val.prob.ci.2(calibration5[,1], calibration5[,2])
+```
+\newpage 
+
+## GAM
+```{r, warning=F, message=F}
+val.prob.ci.2(calibration6[,1], calibration6[,2])
+```
+\newpage
+
+# Grid of ROC plots
+```{r}
+Grid_full <- grid.arrange(roc1, roc2, roc3, roc4, roc5, roc6, ncol=3)
+# ggsave("AUROC figure.jpg", Grid_full, width = 12, height = 6.5)
+```
+
+
